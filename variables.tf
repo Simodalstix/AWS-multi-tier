@@ -28,34 +28,20 @@ variable "bastion_allowed_cidr" {
   type        = string
 }
 
-variable "bastion_ami" {
-  description = "AMI for bastion host"
-  type        = string
-}
-
 variable "bastion_instance_type" {
-  description = "Instance type for bastion"
+  description = "EC2 instance type for bastion"
   type        = string
 }
 
 variable "key_name" {
-  description = "Key pair name for SSH"
+  description = "SSH key pair name"
   type        = string
 }
 
-variable "client_vpn_root_cert_arn" {
-  description = "ARN of root certificate for Client VPN authentication"
-  type        = string
-}
-
-variable "client_vpn_server_cert_arn" {
-  description = "ARN of the ACM server certificate for Client VPN"
-  type        = string
-}
-
-variable "client_vpn_cidr" {
-  description = "CIDR block for Client VPN clients"
-  type        = string
+variable "rds_allowed_cidr_blocks" {
+  description = "List of CIDR blocks allowed to connect to RDS"
+  type        = list(string)
+  default     = ["10.0.0.0/16"]
 }
 
 variable "rds_allocated_storage" {
@@ -69,7 +55,7 @@ variable "rds_engine_version" {
 }
 
 variable "rds_instance_class" {
-  description = "Instance class for RDS"
+  description = "RDS instance class"
   type        = string
 }
 
@@ -79,12 +65,18 @@ variable "rds_db_name" {
 }
 
 variable "rds_username" {
-  description = "Master username for RDS"
+  description = "RDS master username"
   type        = string
 }
 
 variable "rds_password" {
-  description = "Master password for RDS"
+  description = "RDS master password"
   type        = string
   sensitive   = true
+}
+
+variable "log_retention_days" {
+  description = "Days to retain CloudWatch Logs"
+  type        = number
+  default     = 14
 }

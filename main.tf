@@ -1,4 +1,3 @@
-// main.tf
 terraform {
   required_providers {
     aws = {
@@ -12,40 +11,43 @@ provider "aws" {
   region = var.aws_region
 }
 
-// VPC
+data "aws_caller_identity" "current" {}
+
+data "aws_ami" "amazon_linux2" {
+  most_recent = true
+  owners      = ["amazon"]
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
+// VPC + Subnets
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
-  tags = {
-    Name = "multi-tier-vpc"
-  }
+  tags                 = { Name = "multi-tier-vpc" }
 }
 
-// Public Subnets
 resource "aws_subnet" "public" {
   count                   = length(var.public_subnets_cidrs)
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnets_cidrs[count.index]
   availability_zone       = var.availability_zones[count.index]
   map_public_ip_on_launch = true
-  tags = {
-    Name = "public-${count.index + 1}"
-  }
+  tags                    = { Name = "public-${count.index + 1}" }
 }
 
-// Private Subnets
 resource "aws_subnet" "private" {
   count             = length(var.private_subnets_cidrs)
   vpc_id            = aws_vpc.main.id
   cidr_block        = var.private_subnets_cidrs[count.index]
   availability_zone = var.availability_zones[count.index]
-  tags = {
-    Name = "private-${count.index + 1}"
-  }
+  tags              = { Name = "private-${count.index + 1}" }
 }
 
-// Internet Gateway and Route Table for public
+// Internet Gateway & Public Route Table
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
   tags   = { Name = "public-igw" }
@@ -66,13 +68,12 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-// Bastion Host Security Group
+// Bastion Host
 resource "aws_security_group" "bastion_sg" {
   name        = "bastion-sg"
   description = "Allow SSH"
   vpc_id      = aws_vpc.main.id
   ingress {
-    description = "SSH from allowed CIDR"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
@@ -85,37 +86,48 @@ resource "aws_security_group" "bastion_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+module "bastion_key" {
+  source           = "./modules/ssh_keypair"
+  key_name_prefix  = "simo-bastion"
+  private_key_path = "bastion.pem"
+}
 
-// Bastion Host
 resource "aws_instance" "bastion" {
-  ami                    = var.bastion_ami
+  ami                    = data.aws_ami.amazon_linux2.id
   instance_type          = var.bastion_instance_type
   subnet_id              = aws_subnet.public[0].id
   vpc_security_group_ids = [aws_security_group.bastion_sg.id]
-  key_name               = var.key_name
+  key_name               = module.bastion_key.key_name
   tags                   = { Name = "bastion-host" }
 }
 
-// Client VPN Endpoint
-resource "aws_ec2_client_vpn_endpoint" "vpn" {
-  authentication_options {
-    type                       = "certificate-authentication"
-    root_certificate_chain_arn = var.client_vpn_root_cert_arn
-  }
-  client_cidr_block      = var.client_vpn_cidr
-  server_certificate_arn = var.client_vpn_server_cert_arn
-  connection_log_options {
-    enabled               = true
-    cloudwatch_log_group  = aws_cloudwatch_log_group.client_vpn.name
-    cloudwatch_log_stream = aws_cloudwatch_log_stream.client_vpn.name
-  }
-  tags = { Name = "client-vpn" }
+output "bastion_private_key_path" {
+  value = module.bastion_key.private_key_path
 }
+
 
 // RDS PostgreSQL
 resource "aws_db_subnet_group" "rds" {
   name       = "rds-subnets"
-  subnet_ids = aws_subnet.private.*.id
+  subnet_ids = aws_subnet.private[*].id
+}
+
+resource "aws_security_group" "rds_sg" {
+  name        = "rds-sg"
+  description = "Allow DB traffic"
+  vpc_id      = aws_vpc.main.id
+  ingress {
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = var.rds_allowed_cidr_blocks
+  }
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 }
 
 resource "aws_db_instance" "postgres" {
@@ -133,7 +145,7 @@ resource "aws_db_instance" "postgres" {
   tags                   = { Name = "rds-postgres" }
 }
 
-// AWS Backup Vault
+// AWS Backup
 resource "aws_backup_vault" "main" {
   name = "main-backup-vault"
 }
@@ -146,12 +158,12 @@ resource "aws_backup_plan" "plan" {
     schedule          = "cron(0 5 * * ? *)"
     lifecycle {
       cold_storage_after = 30
-      delete_after       = 90
+      delete_after       = 120
     }
   }
 }
 
-// CloudWatch Alarm & SNS
+// Monitoring & Alerts
 resource "aws_sns_topic" "alarms" {
   name = "alarm-topic"
 }
@@ -168,14 +180,22 @@ resource "aws_cloudwatch_metric_alarm" "cpu_alarm" {
   alarm_actions       = [aws_sns_topic.alarms.arn]
 }
 
-// Logging Best Practices: CloudTrail
-resource "aws_s3_bucket" "trail_bucket" {
-  bucket = "cloudtrail-logs-${var.aws_region}-${random_id.bucket_hex.hex}"
-  acl    = "private"
-}
-
+// CloudTrail Logging
 resource "random_id" "bucket_hex" {
   byte_length = 4
+}
+
+resource "aws_s3_bucket" "trail_bucket" {
+  bucket        = "cloudtrail-logs-${var.aws_region}-${random_id.bucket_hex.hex}"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_public_access_block" "trail_block" {
+  bucket                  = aws_s3_bucket.trail_bucket.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_cloudtrail" "main" {
@@ -184,4 +204,55 @@ resource "aws_cloudtrail" "main" {
   include_global_service_events = true
   is_multi_region_trail         = true
   enable_log_file_validation    = true
+}
+
+// After your aws_cloudtrail resource…
+data "aws_iam_policy_document" "cloudtrail_bucket_policy" {
+  statement {
+    sid    = "AllowCloudTrailAclCheck"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    actions   = ["s3:GetBucketAcl"]
+    resources = [aws_s3_bucket.trail_bucket.arn]
+  }
+
+  statement {
+    sid    = "AllowCloudTrailWrite"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.trail_bucket.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+  }
+
+  statement {
+    sid    = "AllowCloudTrailListBucket"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["cloudtrail.amazonaws.com"]
+    }
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.trail_bucket.arn]
+    condition {
+      test     = "StringLike"
+      variable = "s3:prefix"
+      values   = ["AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "trail" {
+  bucket = aws_s3_bucket.trail_bucket.id
+  policy = data.aws_iam_policy_document.cloudtrail_bucket_policy.json
 }
