@@ -38,12 +38,6 @@ variable "key_name" {
   type        = string
 }
 
-variable "rds_allowed_cidr_blocks" {
-  description = "List of CIDR blocks allowed to connect to RDS"
-  type        = list(string)
-  default     = ["10.0.0.0/16"]
-}
-
 variable "rds_allocated_storage" {
   description = "RDS storage in GB"
   type        = number
@@ -79,4 +73,10 @@ variable "log_retention_days" {
   description = "Days to retain CloudWatch Logs"
   type        = number
   default     = 14
+}
+
+variable "ssh_source_cidr" {
+  description = "CIDR block allowed to SSH to the bastion host"
+  type        = string
+  default     = "163.47.120.158/32" # My IP 
 }
