@@ -1,0 +1,17 @@
+aws_region                = "us-east-1"
+availability_zones        = ["us-east-1a", "us-east-1b"]
+vpc_cidr                  = "10.0.0.0/16"
+public_subnets_cidrs      = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnets_cidrs     = ["10.0.101.0/24", "10.0.102.0/24"]
+bastion_allowed_cidr      = "0.0.0.0/0"
+bastion_ami               = "ami-0abcdef1234567890"
+bastion_instance_type     = "t3.micro"
+key_name                  = "my-keypair"
+client_vpn_root_cert_arn  = "arn:aws:acm:us-east-1:123456789012:certificate/abcdefg"
+client_vpn_cidr           = "10.200.0.0/16"
+rds_allocated_storage     = 20
+rds_engine_version        = "13.7"
+rds_instance_class        = "db.t3.micro"
+rds_db_name               = "appdb"
+rds_username              = "admin"
+rds_password              = "P@ssw0rd123!"
